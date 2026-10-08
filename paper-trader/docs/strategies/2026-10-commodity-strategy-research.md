@@ -479,7 +479,7 @@ it survives a 6% spread. `vwap_band_reversion` holds for days to weeks, so it ne
 longer-dated option: a strategy can now declare `option_tenor_days` (live: the provider
 picks the earliest expiry at least that far out; premium backtest: the default option
 life). At ~30 days (the in-sample best of 14/21/30) it is usable on options too (OOS
-+₹10.7k, PF 1.43; 2019, 2023 and 2026 slightly negative). `gold_month_turn` stays low-conviction (large OOS drawdown, weak pre-2019).
++₹10.7k, PF 1.43; 2019, 2023 and 2026 slightly negative). `gold_month_turn` failed its real-MCX check and is not deployable (§6e).
 
 Not modelled: MCX option liquidity (check the bid-ask on NATGASMINI/CRUDEOILM options in
 the Options Calc view before relying on the 2–6% spread assumption), whether MCX lists
@@ -558,6 +558,32 @@ tiny (1–9 trades per cell over 7–10 months), so this confirms direction, not
 the edge. `gold_month_turn` failed its real-data window (Jan-2026 crash month) and is
 downgraded to not deployable. Real MCX gold traded ~9% above the proxy level (MCX premium
 over landed gold larger than the 6% assumed) — a scaling difference, not a sign change.
+
+**3. Real MCX option bid-ask — not obtainable without a login.** Moneycontrol serves
+MCX futures bars only: its option symbols (`NATGASMINI_2026-10-23_MCX_CE_315`) are
+rejected and its `commodityoption` feed is "invalid" for MCX. Kite's quote API needs the
+daily access token. So, instead of the real spread, the research gives the **break-even
+spread** — the round-trip bid-ask (as % of the option mid) at which each strategy's OOS
+options P&L reaches zero (`research/commodity/spread_breakeven.py`; each strategy's shipped
+`option_exits` / `option_tenor_days`; OOS 2024-01 → 2026-10, Dukascopy proxy):
+
+| Strategy (options) | 2% | 4% | 6% | 8% | 10% | 15% | 20% | break-even |
+|---|---|---|---|---|---|---|---|---|
+| spike_fade × NATGASMINI 15m | +13.1k | +9.4k | +5.7k | +1.9k | −1.8k | −11.2k | −21.7k | **≈ 9%** |
+| spike_fade × CRUDEOILM 15m | +33.9k | +31.9k | +31.7k | +29.7k | +27.7k | +22.6k | +17.5k | > 20% |
+| shock_reversal × CRUDEOILM 15m | +11.1k | +10.0k | +8.8k | +7.6k | +6.4k | +3.5k | +0.5k | ≈ 20% |
+| vwap_band_reversion × NATGASMINI 30m | +10.7k | +7.8k | +4.8k | +1.9k | −1.0k | −8.3k | −15.7k | **≈ 9%** |
+
+How to use it: in the Options Calc view, read the ATM CE/PE bid and ask of the contract
+the bot would pick: its spread % is (ask − bid) / LTP, the same `spread_pct` the picker
+uses. The crude strategies stay profitable
+with almost any realistic spread. The two NATGASMINI strategies need the spread **below
+~5%** to keep at least half of their edge, and they **lose above ~9%** — if NATGASMINI
+options quote wider than that, trade those two signals on the futures instead, or not at
+all. (The live picker already rejects any contract whose spread is above `max_spread_pct`,
+3% by default, so on a wide day the bot skips the trade instead of paying the spread. If
+the real MCX spreads sit above 3% most of the time, the bot will rarely trade these
+signals at all — raise `max_spread_pct` in Settings only up to the break-even above.)
 
 ## 7. Full evaluation matrix
 
@@ -655,15 +681,16 @@ trades / max DD ₹ | OOS at 2× slippage | bootstrap P(OOS > 0).
 Kite gives a longer, cleaner history (with volume) — use it to grow the sample:
 
 1. **Backtests view → strategies:** select `spike_fade`, `shock_reversal`,
-   `vwap_band_reversion` (and `gold_month_turn` for GOLDM/GOLDGUINEA) on NATGASMINI,
-   CRUDEOILM and the gold contracts. Prefer the **60m interval** — Kite serves 400 days of
+   `vwap_band_reversion` on NATGASMINI and CRUDEOILM (`gold_month_turn` on GOLDM only
+   to grow its sample — it is not deployable, §6e). Prefer the **60m interval** — Kite serves 400 days of
    60m history but only 200 days of 15m, and the shock strategies spend their first ~30
    sessions warming up their volatility norm. Expect few trades (≈ 10–15 a year per
    strategy): judge the sign and the profit factor against §4.5/§7, not the rupee total.
 2. **Premium (options) column:** the sweep's premium path now applies each strategy's own
    `option_exits` and `option_tenor_days`, matching what the live bot will do (§6c).
 3. **Options Calc view:** before paper trading, confirm the bot finds an option chain for
-   each instrument and check the real bid-ask spread (the research assumed 2–6%).
+   each instrument and check the real bid-ask spread against the break-even spreads in
+   §6e (≈ 9% for the NATGASMINI strategies, ≈ 20% or more for crude).
 4. **Paper trade** with the strategy assigned per instrument (Home/Monitor). The live
    engine fetches the extra history the shock strategies need (`min_history_days`),
    enters at 09:30 the session after a shock, and uses the strategy's option exits.
