@@ -598,6 +598,25 @@ trades / max DD ₹ | OOS at 2× slippage | bootstrap P(OOS > 0).
 | trend_impulse_v3 | GOLDPETAL | 30m | -3.7k (0.745) | +0.3k (1.015) / 506 / 2.8k | -2.7k | 0.531 |
 | trend_impulse_v3 | GOLDPETAL | 60m | -2.0k (0.799) | -1.4k (0.923) / 272 / 4.0k | -3.1k | 0.351 |
 
+## 7b. Validating on real MCX data (your next step, needs Kite)
+
+1. **Backtests view → strategies:** select `spike_fade`, `shock_reversal`,
+   `vwap_band_reversion` (and `gold_month_turn` for GOLDM/GOLDGUINEA) on NATGASMINI,
+   CRUDEOILM and the gold contracts. Prefer the **60m interval** — Kite serves 400 days of
+   60m history but only 200 days of 15m, and the shock strategies spend their first ~30
+   sessions warming up their volatility norm. Expect few trades (≈ 10–15 a year per
+   strategy): judge the sign and the profit factor against §4.5/§7, not the rupee total.
+2. **Premium (options) column:** the sweep's premium path now applies each strategy's own
+   `option_exits` and `option_tenor_days`, matching what the live bot will do (§6c).
+3. **Options Calc view:** before paper trading, confirm the bot finds an option chain for
+   each instrument and check the real bid-ask spread (the research assumed 2–6%).
+4. **Paper trade** with the strategy assigned per instrument (Home/Monitor). The live
+   engine fetches the extra history the shock strategies need (`min_history_days`),
+   enters at 09:30 the session after a shock, and uses the strategy's option exits.
+
+(The mock provider used in tests serves only a few sessions of NSE-hours candles, so a
+mock sweep of these strategies shows zero trades — that is expected, not a failure.)
+
 ## 8. Reproduce
 
 ```bash
