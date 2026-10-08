@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     gap_guard_index: str = "NIFTY"           # instrument key whose open/prev-close defines the market gap
     order_failure_disarm_count: int = 3      # DISARM after this many CONSECUTIVE live order failures (systemic: bad token/IP/margin) — re-arm manually after fixing (#14). 0 = off
     block_overnight_into_weekend: bool = False
-    max_holding_days: int = 5                # hard cap on holding period (trading days)
+    max_holding_days: int = 5                # hard cap on holding period (trading days = weekdays held; runner uses np.busday_count)
     square_off_buffer_minutes: float = 15.0  # decide / square-off this long before session close
 
     # ── adaptive order routing (live execution safety) ─────────────────────

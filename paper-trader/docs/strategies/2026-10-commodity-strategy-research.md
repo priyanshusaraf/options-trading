@@ -643,9 +643,10 @@ edge, because three global risk settings (owner policy — NOT changed) cut them
 2. **`intraday_block_weekday = 1`** — no new entries on Tuesday (meant for NIFTY
    expiry) also blocks MCX. A shock on a Monday always enters on a Tuesday, so it is
    always lost (3 of 12 spike_fade signals here).
-3. **`max_holding_days = 5`** cut vwap_band_reversion's longer holds. Note: it
-   counts CALENDAR days (`runner.py`, `now.date() − entry.date()`), while its comment
-   in `core/config.py` says trading days.
+3. **`max_holding_days = 5`** cut vwap_band_reversion's longer holds. It counted
+   CALENDAR days while `core/config.py` documents trading days; fixed — the runner
+   now counts weekdays held (`np.busday_count`), so a weekend no longer uses up two
+   days of the cap (test in `tests/test_overnight_multiday.py`).
 
 "Settings below" = `overnight_auto_pct 0.25`, `intraday_block_weekday −1`,
 `max_holding_days 30` — then the live engine tracks the backtest closely (the extra

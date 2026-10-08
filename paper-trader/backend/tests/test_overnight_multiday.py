@@ -63,3 +63,17 @@ def test_holding_cap_re_fires_on_later_session(monkeypatch):
     # re-check must re-fire and square the position off. The sticky flag froze it.
     r.handle_overnight(dt.datetime(2026, 6, 7, 15, 30))
     assert r.broker.position_for("NIFTY") is None
+
+
+def test_holding_cap_counts_trading_days_not_weekend(monkeypatch):
+    """max_holding_days counts trading days (config): a position opened on a
+    Thursday has held 3 trading days at the next Tuesday's close, not 5."""
+    r = _live_runner(monkeypatch)
+    pos, _, _ = _open_small_holdable(r)
+    pos.entry_time = dt.datetime(2026, 6, 4, 10, 0)    # Thursday
+    r.broker.commit()
+    r.params["max_holding_days"] = 4
+    r.handle_overnight(dt.datetime(2026, 6, 9, 15, 30))   # Tuesday: 3 trading days
+    assert r.broker.position_for("NIFTY") is not None
+    r.handle_overnight(dt.datetime(2026, 6, 10, 15, 30))  # Wednesday: 4 -> cap reached
+    assert r.broker.position_for("NIFTY") is None

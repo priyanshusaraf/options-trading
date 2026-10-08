@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import select
 
@@ -1022,7 +1023,9 @@ class EngineRunner:
             if pos.last_squareoff_date == now.date():
                 continue  # already decided this session — don't re-snapshot/re-close
             dte = (pos.expiry - now.date()).days if pos.expiry else None
-            holding_days = max(0, (now.date() - pos.entry_time.date()).days)
+            # trading days (weekdays) held, as `max_holding_days` is documented — a
+            # weekend no longer counts as two days of the cap
+            holding_days = max(0, int(np.busday_count(pos.entry_time.date(), now.date())))
             into_weekend = now.weekday() == 4   # Friday close
             keep, reason = overnight_decision(
                 pos.entry_cost, equity, pos.reinforcement_count,
