@@ -128,7 +128,10 @@ gold — low conviction), plus `vwap_slope_divergence`,
 Shared helpers: `strategy/ta.py` (VWAPs, RSI divergence, DST-aware MCX session clock);
 `strategy/regime.py` (technical regime labels). Backtest-only opt-ins on a Strategy:
 `pyramiding`, `session_flat`, `warmup_columns`; `simulate(..., slippage_pct=)`. Live-engine hint:
-`min_history_days` (the runner fetches `history_days_for(strategy, interval, history_days)`).
+`min_history_days` (the runner fetches `history_days_for(strategy, interval, history_days)`) and
+`option_exits` (per-strategy premium stop / target / trail applied at live entry via
+`option_entry_params` + `trail_allowed`, and by default in `backtest/premium.py`; strategies
+without it keep the global Settings).
 Live guards matter for strategy timing: signals > `max_signal_age_minutes` old are dropped and
 nothing opens outside the session or before `entry_window_start` — a strategy that decides on a
 session's last candle can never enter live (see `shock_reversal.decide_at`). The research

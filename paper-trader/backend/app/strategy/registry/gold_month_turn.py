@@ -113,6 +113,10 @@ class GoldMonthTurn(Strategy):
         "session_close": None,          # IST minutes; None = MCX schedule (23:30 / 23:55)
     }
     session_flat = False
+    # Options path: the global −35%/+60%/trail exits cut the 4-day calendar hold
+    # (IS +Rs5k vs +Rs30k with the strategy's own exit on GOLDM options); a −95%
+    # disaster stop, no target, no trail (research §6c).
+    option_exits = {"stop_loss_pct": 0.95, "target_pct": None, "trail_enabled": False}
     warmup_columns = ("atr",)
     min_history_days = 40
 

@@ -92,8 +92,12 @@ DEFAULT_PREMIUM_PARAMS: dict = {
 
 
 def _candles_to_df(candles) -> pd.DataFrame:
+    # volume rides along (same as engine._candles_to_df) so volume-aware
+    # strategies (VWAP …) see the same frame on the premium path as on the spot path
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+                          "low": c.low, "close": c.close,
+                          "volume": float(getattr(c, "volume", 0.0) or 0.0)}
+                         for c in candles])
 
 
 def _row_date(row):
@@ -204,6 +208,14 @@ def simulate_premium(candles, inst, interval: str, *, strategy=None,
     strat = strategy if strategy is not None else get_strategy(None)
     params = params or {}
     p = dict(DEFAULT_PREMIUM_PARAMS)
+    # the strategy's declared option-exit policy (same one the live engine applies)
+    oe = getattr(strat, "option_exits", None) or {}
+    if oe.get("stop_loss_pct") is not None:
+        p["stop_loss_pct"] = float(oe["stop_loss_pct"])
+    if "target_pct" in oe:
+        p["target_pct"] = float("inf") if oe["target_pct"] is None else float(oe["target_pct"])
+    if oe.get("trail_enabled") is False:
+        p["trail_enabled"] = False
     p.update({k: v for k, v in params.items() if k in DEFAULT_PREMIUM_PARAMS and v is not None})
     strat_kwargs = {k: v for k, v in params.items() if k in strat.default_params}
 
@@ -211,7 +223,8 @@ def simulate_premium(candles, inst, interval: str, *, strategy=None,
     rm = getattr(strat, "risk_model", None)
     if rm:
         sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
-    warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
+    warm_cols = list(getattr(strat, "warmup_columns", None) or
+                     [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns])
     sig = sig.dropna(subset=warm_cols).reset_index(drop=True)
     if sig.empty:
         return [], BTMetrics()

@@ -51,6 +51,14 @@ class Strategy:
     # produce a signal (e.g. a 60-session volatility norm). The runner fetches
     # max(settings.history_days, this), capped at Kite's per-interval maximum.
     min_history_days: int | None = None
+    # LIVE + premium-backtest option-exit policy for positions this strategy opens
+    # (the bot buys an ATM CE/PE on each signal). Keys, all optional:
+    #   stop_loss_pct  — premium stop as a fraction of entry (e.g. 0.65)
+    #   target_pct     — premium target fraction; None = no target (let it run)
+    #   trail_enabled  — False = no percent-of-premium trailing stop
+    # None = use the global Settings (−35%/+60%/trail). Multi-session strategies
+    # need this: the global stop cuts their trades on noise before they work.
+    option_exits: dict[str, Any] | None = None
 
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError

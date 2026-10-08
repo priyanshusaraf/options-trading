@@ -35,7 +35,7 @@ INSTR = {
                             lot_size=1, strike_step=250, priority=4, mock_spot=90000, mock_vol=0.25),
 }
 INSTR["GOLDM"] = Instrument("GOLDM", "GOLD MINI", "MCX", "MCX", "GOLDM", "GOLDM", lot_size=100,
-                            strike_step=100, priority=5, mock_spot=9000, mock_vol=0.15)
+                            strike_step=10, priority=5, mock_spot=9000, mock_vol=0.15)
 INSTR["GOLDGUINEA"] = Instrument("GOLDGUINEA", "GOLD GUINEA", "MCX", "MCX", "GOLDGUINEA",
                                  "GOLDGUINEA", lot_size=8, strike_step=100, priority=6,
                                  mock_spot=9000, mock_vol=0.15)
@@ -114,6 +114,26 @@ def run(strategy, name: str, tf: str = "15m", params: dict | None = None,
     trades, m = simulate(list(cs), INSTR[name], tf, strategy=strategy, params=p,
                          slippage_pct=slip)
     return _roll_correct(trades, name), m
+
+
+def run_premium(strategy, name: str, tf: str = "15m", params: dict | None = None,
+                premium: dict | None = None, start: str | None = None,
+                end: str | None = None):
+    """The platform's synthetic-premium backtest (app/backtest/premium.py: ATM
+    CE/PE bought on the signal, Black-Scholes on realised vol, the live bot's
+    premium stop/target/trail, option charges + spread). Trades held across a
+    futures roll are DROPPED (an option sits on one contract month; the front-month
+    roll gap is not its P&L) — returns (trades, n_dropped)."""
+    from app.backtest.premium import simulate_premium
+    cs = candles(name, tf, start, end)
+    p = dict(strategy.default_params)
+    if params:
+        p.update(params)
+    p.update(premium or {})
+    trades, _ = simulate_premium(list(cs), INSTR[name], tf, strategy=strategy, params=p)
+    rl = rolls(name)
+    keep = [t for t in trades if not any(t.entry_time < ep < t.exit_time for ep, _ in rl)]
+    return keep, len(trades) - len(keep)
 
 
 def summarize(trades, label: str = "") -> dict:

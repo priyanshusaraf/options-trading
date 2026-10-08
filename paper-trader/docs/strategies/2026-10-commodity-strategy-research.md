@@ -338,6 +338,12 @@ Sharpe 1.46, max DD ₹39k), OOS +₹68k (Sharpe 0.57, max DD ₹73k); monthly c
 the crude leg with the NG legs ≈ 0. (Swapping the crude leg to `spike_fade` after seeing
 its result gives OOS +₹86k, Sharpe 0.69 — post-hoc, so not the headline.)
 
+**On the bot's options path** (§6c) the three shock-family legs stay profitable IS and
+OOS once each strategy carries its own option-exit policy (the global −35%/+60% exits
+destroyed them): spike_fade NG OOS +₹13k, spike_fade crude +₹34k, shock_reversal crude
++₹11k, each with ≈ ₹2–4k premium per lot and a worst OOS drawdown of ₹5.5–6.9k.
+`vwap_band_reversion` is a futures strategy (marginal on options).
+
 **Gold: a weak pass.** `gold_month_turn` (§4.7) is profitable after charges, slippage
 and futures carry on GOLDPETAL, GOLDGUINEA and GOLDM in both periods and every year
 2019–2026 — but on unseen 2005–2018 data its edge was only ~7.5 bps a month above
@@ -422,6 +428,55 @@ sensitive (mainly the hold length) — treat crude as the weaker leg.
 Still to keep in mind for live use: the engine trades **options** on these signals,
 with its own −35%/+60% premium stop/target, overnight-holding rules and expiry
 guards; the backtests here trade the underlying. Paper-trade first.
+
+## 6c. The options path — how the bot actually trades these signals (added 2026-10-08)
+
+The live bot does not trade the futures: on each signal it BUYS an ATM CE (long) or PE
+(short) and manages the premium with a global −35% stop, +60% target and a ratcheting
+trail. Re-run through the platform's synthetic-premium backtest
+(`app/backtest/premium.py`: Black-Scholes on realised vol × 1.15, option charges,
+half-spread each side, ~14-day options; trades held across a futures roll dropped —
+`research/commodity/premium_eval.py`, `premium_grid.py`, `premium_final.py`):
+
+**With the bot's global exits the edge disappears** — 87–98% of trades hit the −35%
+premium stop on noise before the multi-session reversion arrives (2% spread):
+
+| Strategy | global −35%/+60%/trail: IS → OOS | strategy exits only: IS → OOS |
+|---|---|---|
+| spike_fade × NG | +₹12.6k → **−₹3.5k** | +₹101.5k → +₹16.0k |
+| spike_fade × crude | −₹5.9k → +₹7.9k | +₹11.0k → +₹35.3k |
+| shock_reversal × crude | −₹1.7k → −₹0.6k | +₹15.9k → +₹10.5k |
+| vwap_band_reversion × NG | −₹6.4k → +₹3.3k | +₹44.2k → +₹5.3k |
+
+**Platform change:** a strategy can now declare `option_exits` (premium stop, target or
+`None`, trail on/off). The live entry applies it (`runner.option_entry_params`; a `None`
+target sets the position's existing `no_take_profit` flag; `trail_allowed` skips the
+percent trail for that position) and the premium backtest uses it by default. Chosen
+on IS only (stop × option-tenor grid; every stop from −50% to none was profitable for
+the shock family): shock family −65% disaster stop, no target, no trail;
+`vwap_band_reversion` and `gold_month_turn` −95%, no target, no trail.
+
+Results with the shipped policies (options path):
+
+| Strategy (options) | IS | OOS | OOS @ 6% spread | OOS max DD | premium / lot |
+|---|---|---|---|---|---|
+| **spike_fade × NG 15m** | +₹110k (PF 3.1) | **+₹13.1k (PF 1.45)** | +₹5.7k | ₹6.9k | ~₹4.2k |
+| **spike_fade × crude 15m** | +₹12.2k (PF 1.45) | **+₹33.9k (PF 3.05)** | +₹31.7k | ₹5.5k | ~₹2.2k |
+| **shock_reversal × crude 15m** | +₹16.4k (PF 1.96) | **+₹11.1k (PF 2.11)** | +₹8.8k | ₹5.8k | ~₹2.3k |
+| vwap_band_reversion × NG 30m | +₹43.4k (PF 1.79) | +₹4.4k (PF 1.15) | +₹0.4k | ₹12.6k | ~₹3.9k |
+| gold_month_turn × GOLDM 60m | +₹29.7k (PF 1.34) | +₹34.0k (PF 1.21) | +₹6.2k | ₹112.7k | ~₹12.5k |
+
+Reading it: the **shock family on options** is the best fit for a ₹50k account — ~₹2–4k
+of premium per lot, worst OOS drawdown ₹5.5–6.9k (vs ₹17–41k for one futures lot), and
+it survives a 6% spread. `vwap_band_reversion` is marginal on options (its multi-week
+holds want ~30-day options; the picker does not choose by tenor) — it is a futures
+strategy. `gold_month_turn` stays low-conviction (large OOS drawdown, weak pre-2019).
+
+Not modelled: MCX option liquidity (check the bid-ask on NATGASMINI/CRUDEOILM options in
+the Options Calc view before relying on the 2–6% spread assumption), whether MCX lists
+options on each mini contract (the live picker uses whatever the Kite instrument dump
+holds — verify), and the bot's overnight-holding rules (positions > 10% of capital need a
+reinforcement to carry; ~₹2–4k of premium on ₹50k is within the 10% auto-hold limit).
 
 ## 7. Full evaluation matrix
 

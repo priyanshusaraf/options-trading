@@ -76,6 +76,27 @@ _KITE_MAX_DAYS = {"minute": 60, "3minute": 90, "5minute": 100, "10minute": 100,
                   "15minute": 200, "30minute": 200, "60minute": 400, "day": 2000}
 
 
+def option_entry_params(params: dict, strategy) -> tuple[dict, bool]:
+    """Entry-time params for an OPTION position opened by `strategy`: its declared
+    `option_exits` override the global stop/target (target_pct None -> no target,
+    returned as `no_take_profit=True`). Returns (params, no_take_profit)."""
+    oe = getattr(strategy, "option_exits", None) or {}
+    p = dict(params)
+    if oe.get("stop_loss_pct") is not None:
+        p["stop_loss_pct"] = float(oe["stop_loss_pct"])
+    no_tp = "target_pct" in oe and oe["target_pct"] is None
+    if oe.get("target_pct") is not None:
+        p["target_pct"] = float(oe["target_pct"])
+    return p, no_tp
+
+
+def trail_allowed(params: dict, strategy) -> bool:
+    """The percent-of-premium trail runs unless disabled globally or by the
+    position's strategy (`option_exits["trail_enabled"] = False`)."""
+    oe = getattr(strategy, "option_exits", None) or {}
+    return bool(params.get("trail_enabled", True)) and oe.get("trail_enabled", True) is not False
+
+
 def history_days_for(strategy, interval: str, base_days: int) -> int:
     """Candle history (calendar days) to fetch for a live scan: the global setting,
     raised to the strategy's declared `min_history_days`, capped at what one Kite
@@ -497,7 +518,7 @@ class EngineRunner:
         # stop as the disaster floor; the ratchet fires the primary exit.
         if pos.entry_atr is not None:
             return
-        if not p.get("trail_enabled", True):
+        if not trail_allowed(p, get_strategy(pos.strategy_key) if pos.strategy_key else None):
             return
         new_stop = trailing_stop(
             pos.entry_premium, pos.high_water_premium or pos.entry_premium, pos.stop_price,
@@ -895,13 +916,21 @@ class EngineRunner:
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
                          + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
+                # a strategy may carry its own option-exit policy (stop/target/trail)
+                strat_e = get_strategy(self.strategy_keys.get(c.instrument_key))
+                entry_params, no_tp = option_entry_params(self.params, strat_e)
                 pos = self.broker.open_position(inst, direction, pick.chosen,
-                                                pick.reason, now, chain.spot, self.params, plan=plan)
+                                                pick.reason, now, chain.spot, entry_params,
+                                                plan=plan)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
+                if getattr(strat_e, "option_exits", None):
+                    pos.strategy_key = strat_e.key
+                    if no_tp:
+                        pos.no_take_profit = True   # same flag as the owner's "let it run"
+                    self.broker.commit()
                 # H2 — seed the ratchet for a risk_model strategy so this position is
                 # managed by the backtest-validated ratchet, not the legacy premium trail.
-                strat_e = get_strategy(self.strategy_keys.get(c.instrument_key))
                 rm_e = getattr(strat_e, "risk_model", None)
                 if rm_e:
                     self._seed_ratchet(pos, chain.spot, rm_e,

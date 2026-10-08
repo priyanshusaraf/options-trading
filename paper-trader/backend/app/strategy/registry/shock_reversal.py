@@ -74,6 +74,10 @@ class ShockReversal(Strategy):
     warmup_columns = ("atr",)
     # live: 60 sessions of volatility norm + the 20-session trend ≈ 85 trading days
     min_history_days = 120
+    # Options path (bot buys ATM CE/PE): the global −35% premium stop stopped out
+    # ~90% of these 3-session trades on noise. Chosen in-sample on the synthetic-
+    # premium backtest: a −65% disaster stop, no target, no trail (research §6c).
+    option_exits = {"stop_loss_pct": 0.65, "target_pct": None, "trail_enabled": False}
 
     def compute(self, df: pd.DataFrame, shock_mode: str = "session", gap_clip: float = 0.015,
                 z_len: int = 60, z_entry: float = 2.0, side: str = "both",

@@ -150,6 +150,9 @@ class VwapBandReversion(Strategy):
         "add_k": 3.5,
     }
     risk_model = None                   # ATR stops hurt (IS): reversion needs room
+    # Options path: holds last days-to-weeks; the global −35%/+60%/trail exits
+    # turned it into a loser. No target/trail; a −95% disaster stop (research §6c).
+    option_exits = {"stop_loss_pct": 0.95, "target_pct": None, "trail_enabled": False}
     pyramiding = {"max_adds": 1}        # one scale-in at the deeper add_k band
     session_flat = False                # swing: holds overnight (set True for anchor="session")
     warmup_columns = ("atr",)
