@@ -57,8 +57,14 @@ from app.strategy.signals import to_payload
 
 
 def _to_df(candles) -> pd.DataFrame:
+    # volume rides along exactly as in the backtests (backtest/engine._candles_to_df,
+    # backtest/premium._candles_to_df): volume-weighted strategies (vwap_band_reversion,
+    # vwap_slope_divergence) otherwise ran LIVE on equal weights while every backtest
+    # used real volume. Price-only strategies ignore the column.
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+                          "low": c.low, "close": c.close,
+                          "volume": float(getattr(c, "volume", 0.0) or 0.0)}
+                         for c in candles])
 
 
 def _equity_charge_segment(inst) -> str:
@@ -726,7 +732,7 @@ class EngineRunner:
                 if sig in ("LONG_ENTRY", "SHORT_ENTRY"):
                     pos = held[key]
                     sig_dir = "LONG" if sig == "LONG_ENTRY" else "SHORT"
-                    if sig_dir == pos.direction:
+                    if sig_dir == pos.direction and self._fresh_since_fill(key, st, pos):
                         self._record_signal(now, key, st, note="reinforcement")
                         self.broker.reinforce_position(pos, self.params, now)
                 continue
@@ -990,6 +996,20 @@ class EngineRunner:
                         self.state[pickk.instrument_key]["position"] = p.to_dict() if p else None
                 for c, reason in sel.skipped:
                     log.info(f"intraday signal dropped — {reason}", instrument=c.instrument_key)
+
+    def _fresh_since_fill(self, key: str, st: dict, pos) -> bool:
+        """A reinforcement needs a crossover on a candle that COMPLETED after the
+        position was filled. The latest completed candle stays the same for a whole
+        interval, so without this the very signal that opened the position is
+        re-read on every loop until the next candle and "confirms" itself — a +10%
+        premium wiggle inside the entry candle then locks the stop above entry
+        (caught by the MCX paper replay: a 3-session spike_fade trade stopped out
+        on day 2). A missing candle time never blocks (tests / warm-up)."""
+        bar = st.get("time") if st else None
+        if bar is None or pos.entry_time is None:
+            return True
+        iv_min = _INTERVAL_MINUTES.get(self._interval_for(key), 15)
+        return bar + iv_min * 60 > ist_epoch(pos.entry_time)
 
     # ── overnight holding (option buying) ─────────────────────────────────
     def square_off_for_overnight(self, now) -> list[dict]:

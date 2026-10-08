@@ -78,6 +78,11 @@ class ShockReversal(Strategy):
     # ~90% of these 3-session trades on noise. Chosen in-sample on the synthetic-
     # premium backtest: a −65% disaster stop, no target, no trail (research §6c).
     option_exits = {"stop_loss_pct": 0.65, "target_pct": None, "trail_enabled": False}
+    # Live picker: an option at least 14 days out — the life the premium backtest
+    # assumed. Without it a signal in the last ~3 days of an option cycle was
+    # SKIPPED (entry_min_days_to_expiry) instead of using the next expiry; caught
+    # by the MCX paper replay (scripts/replay_mcx.py). spike_fade inherits it.
+    option_tenor_days = 14
 
     def compute(self, df: pd.DataFrame, shock_mode: str = "session", gap_clip: float = 0.015,
                 z_len: int = 60, z_entry: float = 2.0, side: str = "both",

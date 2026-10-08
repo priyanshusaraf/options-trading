@@ -31,9 +31,12 @@ def test_mock_chain_honours_min_dte():
     assert far.expiry == pick_expiry(prov._expiries, prov.now().date(), 30)
 
 
-def test_only_band_reversion_declares_a_tenor():
+def test_declared_tenors():
     assert get_strategy("vwap_band_reversion").option_tenor_days == 30
-    for k in ("spike_fade", "shock_reversal", "trend_impulse_v3", "gold_month_turn"):
+    # the shock fades take the option life the premium backtest assumes (14 days)
+    for k in ("spike_fade", "shock_reversal"):
+        assert get_strategy(k).option_tenor_days == 14
+    for k in ("trend_impulse_v3", "gold_month_turn"):
         assert getattr(get_strategy(k), "option_tenor_days", None) is None
 
 

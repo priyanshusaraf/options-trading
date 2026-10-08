@@ -139,6 +139,11 @@ nothing opens outside the session or before `entry_window_start` — a strategy 
 session's last candle can never enter live (see `shock_reversal.decide_at`). The research
 harness + data builders live in `research/commodity/` (data is gitignored).
 
+MCX paper replay: `scripts/replay_mcx.py` drives the real `EngineRunner` over recorded MCX bars
+through `providers/replay.ReplayProvider` (not wired into the factory). MCX closes 23:30 IST under
+US daylight time, else 23:55 — `core/market_hours.session_window()`; keep it in step with
+`strategy/ta.mcx_close_minute`.
+
 MCX lot sizes: Kite's MCX instrument dump says `lot_size=1` for every contract — never use it for
 P&L; `core/instruments.MCX_UNITS_PER_LOT` / `mcx_lot_size()` hold the contract multipliers.
 

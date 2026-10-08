@@ -585,6 +585,79 @@ all. (The live picker already rejects any contract whose spread is above `max_sp
 the real MCX spreads sit above 3% most of the time, the bot will rarely trade these
 signals at all — raise `max_spread_pct` in Settings only up to the break-even above.)
 
+## 6f. Paper-trading replay — the LIVE engine on real MCX bars (added 2026-10-08)
+
+Real-time paper trading needs a Kite login and weeks of market hours. The closest
+step possible here is a **replay**: the real `EngineRunner` (PaperBroker, armed,
+₹50k, one instrument per run) driven over the real MCX 15m prints of §6e by
+`app/providers/replay.ReplayProvider` (`backend/scripts/replay_mcx.py`). The engine
+takes its live path end to end: candle fetch with `min_history_days`, the stale-signal
+and 09:30 entry-window guards, the expiry and weekday guards, the option chain with
+`option_tenor_days`, the picker, per-strategy `option_exits`, mark-to-market stops,
+the overnight square-off rules, and the capital ledger. Option prices are synthetic
+(Black-Scholes on trailing realised vol ×1.15, 2% spread); option expiry = futures
+expiry − 2 business days; a held option is priced off its own futures month.
+
+**Signals:** the live engine sees the same entry signals as the backtest — spike_fade
+NG 6/6, spike_fade crude 6/6, shock_reversal 1/1 (vwap_band_reversion 119/125 entry
+bars; the 6 misses are at the very start of the data, short of its 580-bar anchor).
+Each is seen ~1 minute after its candle closes and fills at the next bar's open, as
+in the backtest. **All four ledgers reconciled to the paisa.**
+
+**Three live-engine bugs found and fixed** (tests in `tests/test_mcx_replay_fixes.py`):
+1. `core/market_hours` closed MCX at 23:30 all year. MCX closes at 23:55 while New
+   York is on standard time (Nov → Mar), so in winter the engine stopped scanning
+   25 minutes early: it never saw the last two 15m bars (the exit bar of
+   spike_fade/shock_reversal) and squared off overnight positions early. Now
+   `session_window()` follows the US DST rule, the same as `ta.mcx_close_minute`.
+2. The live candle frame (`runner._to_df`) dropped `volume`, so VWAP strategies ran
+   live on equal weights while both backtest paths used volume. Now included.
+3. The entry signal "reinforced" its own position: the latest completed candle stays
+   the same for a whole interval, so the signal that opened the trade was re-read as
+   a fresh same-direction signal on every loop until the next candle, and a +10%
+   premium move then locked the stop above entry. Now only a candle completed after
+   the fill can reinforce (`_fresh_since_fill`).
+
+Also changed: `shock_reversal` / `spike_fade` declare `option_tenor_days = 14` (the
+option life the premium backtest already assumed). Without it the live bot SKIPPED
+every signal in the last ~3 days of an option cycle (`entry_min_days_to_expiry`)
+instead of using the next expiry.
+
+**Results with the platform's default risk settings** (real MCX window, 1 lot, 2%
+spread; the backtest column is `run_premium` on the same bars):
+
+| Cell | Live engine, default settings | Live engine, settings below | Backtest |
+|---|---|---|---|
+| spike_fade × NATGASMINI | 5 trades, +₹5.1k | 6 trades, +₹8.2k | 6 trades, +₹7.3k |
+| spike_fade × CRUDEOILM | 4 trades, +₹4.9k | 6 trades, +₹8.6k | 6 trades, +₹7.5k |
+| shock_reversal × CRUDEOILM | 1 trade, −₹0.1k | 1 trade, +₹1.1k | 1 trade, +₹1.2k |
+| vwap_band_reversion × NATGASMINI | 10 trades, +₹2.0k | 8 trades, +₹4.4k | 6 trades, +₹4.4k |
+
+With the default settings the strategies stay profitable but lose ~30–100% of the
+edge, because three global risk settings (owner policy — NOT changed) cut them:
+
+1. **`overnight_auto_pct = 0.10`** — an option above 10% of capital without a
+   reinforcement is squared off at the first close. A 14-day crude ATM option costs
+   ₹6–9k and a 30-day NG option ₹5–7k (> ₹5k), so most 3-session fades were closed
+   on day 1 (`OVERNIGHT_SQUAREOFF`). These strategies are multi-session by design.
+2. **`intraday_block_weekday = 1`** — no new entries on Tuesday (meant for NIFTY
+   expiry) also blocks MCX. A shock on a Monday always enters on a Tuesday, so it is
+   always lost (3 of 12 spike_fade signals here).
+3. **`max_holding_days = 5`** cut vwap_band_reversion's longer holds. Note: it
+   counts CALENDAR days (`runner.py`, `now.date() − entry.date()`), while its comment
+   in `core/config.py` says trading days.
+
+"Settings below" = `overnight_auto_pct 0.25`, `intraday_block_weekday −1`,
+`max_holding_days 30` — then the live engine tracks the backtest closely (the extra
+vwap trades are the two roll-spanning trades the backtest drops). These are global
+settings (Settings view), so they also apply to every other instrument: decide them
+as a risk-policy choice, or run these strategies in a separate paper instance.
+
+Not covered by the replay: the NIFTY gap guard (no NIFTY prints; on Kite it can also
+block MCX entries); `KiteProvider` quotes the near-month future as the chain's spot
+even for a later-month chain, so a 30-day-tenor pick uses the near-month price
+(the replay copies this behaviour).
+
 ## 7. Full evaluation matrix
 
 `research/commodity/final_eval.py` → `results/final_eval.json` (default params incl. the
@@ -691,7 +764,8 @@ Kite gives a longer, cleaner history (with volume) — use it to grow the sample
 3. **Options Calc view:** before paper trading, confirm the bot finds an option chain for
    each instrument and check the real bid-ask spread against the break-even spreads in
    §6e (≈ 9% for the NATGASMINI strategies, ≈ 20% or more for crude).
-4. **Paper trade** with the strategy assigned per instrument (Home/Monitor). The live
+4. **Paper trade** with the strategy assigned per instrument (Home/Monitor) — first
+   decide the three risk settings in §6f, or most multi-session trades are cut on day 1. The live
    engine fetches the extra history the shock strategies need (`min_history_days`),
    enters at 09:30 the session after a shock, and uses the strategy's option exits.
 

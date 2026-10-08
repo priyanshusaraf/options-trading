@@ -25,12 +25,33 @@ SESSIONS: dict[str, tuple[time, time]] = {
     "NSE": (time(9, 15), time(15, 30)),     # NSE cash equity
     "BSE": (time(9, 15), time(15, 30)),     # BSE cash equity
     "NFO_FUT": (time(9, 15), time(15, 30)),
-    "MCX": (time(9, 0), time(23, 30)),      # commodities (energy/metals)
-    "MCX_FUT": (time(9, 0), time(23, 30)),
+    "MCX": (time(9, 0), time(23, 30)),      # commodities (energy/metals) — summer close;
+    "MCX_FUT": (time(9, 0), time(23, 30)),  # 23:55 while New York is on standard time (below)
     "NCDEX": (time(9, 0), time(17, 0)),     # agri commodities
     "NCDEX_FUT": (time(9, 0), time(17, 0)),
 }
 _DEFAULT = (time(9, 15), time(15, 30))
+_MCX_SEGMENTS = ("MCX", "MCX_FUT")
+_MCX_WINTER_CLOSE = time(23, 55)
+
+
+def _us_dst(d: dt.date) -> bool:
+    """New York daylight time on date `d` (US rule since 2007: second Sunday of
+    March → first Sunday of November; judged at noon, like strategy.ta)."""
+    def nth_sunday(year: int, month: int, n: int) -> dt.date:
+        first = dt.date(year, month, 1)
+        return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+    return nth_sunday(d.year, 3, 2) <= d < nth_sunday(d.year, 11, 1)
+
+
+def session_window(segment: str, day: dt.date) -> tuple[time, time]:
+    """(open, close) IST for `segment` on `day`. MCX moves its close with the US DST
+    switch: 23:30 while New York is on daylight time, 23:55 otherwise (Nov→Mar) —
+    the same schedule `strategy.ta.mcx_close_minute` uses for strategy exits."""
+    o, c = SESSIONS.get(segment, _DEFAULT)
+    if segment in _MCX_SEGMENTS and not _us_dst(day):
+        c = _MCX_WINTER_CLOSE
+    return o, c
 
 
 def now_ist() -> dt.datetime:
@@ -65,7 +86,7 @@ def is_open(segment: str, when: dt.datetime | None = None) -> bool:
     t = t.astimezone(IST)
     if t.weekday() >= 5:  # Sat/Sun
         return False
-    o, c = SESSIONS.get(segment, _DEFAULT)
+    o, c = session_window(segment, t.date())
     return o <= t.time() <= c
 
 
@@ -82,6 +103,6 @@ def minutes_to_close(segment: str, when: dt.datetime | None = None) -> float | N
     t = t.astimezone(IST)
     if not is_open(segment, t):
         return None
-    _, c = SESSIONS.get(segment, _DEFAULT)
+    _, c = session_window(segment, t.date())
     close_dt = t.replace(hour=c.hour, minute=c.minute, second=0, microsecond=0)
     return max(0.0, (close_dt - t).total_seconds() / 60.0)
