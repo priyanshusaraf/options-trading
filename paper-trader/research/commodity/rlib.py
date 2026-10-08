@@ -72,6 +72,8 @@ def rolls(name: str) -> tuple:
     if not os.path.exists(f):
         return ()
     r = pd.read_csv(f, parse_dates=["ist", "last_before"])
+    if r.empty:
+        return ()
     px = frame(name, "5m")["close"]
     out = []
     for _, x in r.iterrows():

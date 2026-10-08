@@ -14,9 +14,12 @@ filter, no pyramiding (a second-shock add helped in-sample but lost
 out-of-sample).
 
 Out-of-instrument check: the same settings, never tuned on crude, were
-profitable on CRUDEOILM in every calendar year 2019-2026 (net of charges and
-slippage) — the strongest robustness evidence in the research. Recommended for
-NATGASMINI and CRUDEOILM; not for gold (no up-spike overreaction there).
+profitable on CRUDEOILM in both periods (IS 2019-23 +₹22k PF 1.5, OOS 2024-26
++₹32k PF 2.3; 7 of 8 calendar years positive, 2019 ≈ −₹0.5k), net of charges and
+slippage, and on real NYMEX bars too — the strongest robustness evidence in the
+research. Recommended for NATGASMINI and CRUDEOILM; not for gold (no up-spike
+overreaction there). Entry timing is the live-compatible `next_session` default
+inherited from `shock_reversal`.
 """
 from __future__ import annotations
 

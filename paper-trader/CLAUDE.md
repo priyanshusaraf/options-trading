@@ -122,11 +122,16 @@ backtest. The default strategy keeps the exact v3 chart payload; others go throu
 
 Commodity research strategies (Oct 2026; MCX-proxy validated, see
 `docs/strategies/2026-10-commodity-strategy-research.md`): `spike_fade`, `shock_reversal`,
-`vwap_band_reversion` (passed IS + OOS after charges on NG/crude), plus `vwap_slope_divergence`,
+`vwap_band_reversion` (passed IS + OOS after charges on NG/crude), `gold_month_turn` (weak pass on
+gold — low conviction), plus `vwap_slope_divergence`,
 `adaptive_supertrend`, `vol_squeeze_breakout`, `session_gap_carry` (documented, not deployable).
 Shared helpers: `strategy/ta.py` (VWAPs, RSI divergence, DST-aware MCX session clock);
 `strategy/regime.py` (technical regime labels). Backtest-only opt-ins on a Strategy:
-`pyramiding`, `session_flat`, `warmup_columns`; `simulate(..., slippage_pct=)`. The research
+`pyramiding`, `session_flat`, `warmup_columns`; `simulate(..., slippage_pct=)`. Live-engine hint:
+`min_history_days` (the runner fetches `history_days_for(strategy, interval, history_days)`).
+Live guards matter for strategy timing: signals > `max_signal_age_minutes` old are dropped and
+nothing opens outside the session or before `entry_window_start` — a strategy that decides on a
+session's last candle can never enter live (see `shock_reversal.decide_at`). The research
 harness + data builders live in `research/commodity/` (data is gitignored).
 
 ### Two trading segments

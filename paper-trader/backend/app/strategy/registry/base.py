@@ -47,6 +47,10 @@ class Strategy:
     pyramiding: dict[str, Any] | None = None
     session_flat: bool = False
     warmup_columns: tuple[str, ...] | None = None
+    # LIVE-engine hint: calendar days of candle history this strategy needs to
+    # produce a signal (e.g. a 60-session volatility norm). The runner fetches
+    # max(settings.history_days, this), capped at Kite's per-interval maximum.
+    min_history_days: int | None = None
 
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError

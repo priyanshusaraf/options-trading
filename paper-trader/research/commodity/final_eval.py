@@ -51,6 +51,6 @@ if __name__ == "__main__":
             if not (c[1] == "GOLDM" and c[0] not in ("session_gap_carry", "adaptive_supertrend", "shock_reversal"))]
     with Pool(4) as p:
         res = [r for r in p.map(job, cfgs, chunksize=1) if r]
-    json.dump(res, open("final_eval.json", "w"), indent=1)
+    json.dump(res, open(_os.path.join(HERE, "results", "final_eval.json"), "w"), indent=1)
     for r in res:
         print(f"{r['key']:22s} {r['inst']:10s} {r['tf']:3s} IS {r['IS_net']:>9.0f} pf={r['IS_pf']} | OOS {r['OOS_net']:>9.0f} pf={r['OOS_pf']} n={r['OOS_n']} dd={r['OOS_dd']:.0f} 2xslip={r['OOS_net_2xslip']:.0f} P(>0)={r['OOS_p_pos']}")

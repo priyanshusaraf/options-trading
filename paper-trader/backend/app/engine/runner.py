@@ -71,6 +71,17 @@ def _equity_charge_segment(inst) -> str:
 # live-interval string -> candle minutes (shared by the scan gate and the
 # signal-age guard; an unknown interval falls back to 15m, the strategy default)
 _INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}
+# Kite historical_data: max calendar days per request, per interval.
+_KITE_MAX_DAYS = {"minute": 60, "3minute": 90, "5minute": 100, "10minute": 100,
+                  "15minute": 200, "30minute": 200, "60minute": 400, "day": 2000}
+
+
+def history_days_for(strategy, interval: str, base_days: int) -> int:
+    """Candle history (calendar days) to fetch for a live scan: the global setting,
+    raised to the strategy's declared `min_history_days`, capped at what one Kite
+    historical request allows for the interval."""
+    need = max(int(base_days), int(getattr(strategy, "min_history_days", None) or 0))
+    return min(need, _KITE_MAX_DAYS.get(interval, 200))
 
 
 class EngineRunner:
@@ -282,8 +293,12 @@ class EngineRunner:
             inst = get_instrument(key)
             if not prov.is_tradable_now(inst):
                 continue  # market closed — no new candle can print; don't poll
+            # resolve the strategy first: it may need more history than the default
+            strat = get_strategy(self.strategy_keys.get(key))
+            interval = self._interval_for(key)
             try:
-                candles = prov.get_candles(inst, self._interval_for(key), s.history_days)
+                candles = prov.get_candles(inst, interval,
+                                           history_days_for(strat, interval, s.history_days))
                 self.health.record_ok("candle", prov.now())
                 self.last_scan_ok[key] = prov.now()   # per-instrument freshness
             except Exception as e:
@@ -295,7 +310,6 @@ class EngineRunner:
                 continue
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
-            strat = get_strategy(self.strategy_keys.get(key))
             if strat.key == DEFAULT_STRATEGY_KEY:
                 sig = strat.signals(_to_df(candles), ema_length=s.ema_length,
                                     z_length=s.z_length, entry_z=s.entry_z,

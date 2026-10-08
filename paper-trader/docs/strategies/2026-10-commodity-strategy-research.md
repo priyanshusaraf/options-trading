@@ -130,6 +130,9 @@ Layer study (NATGASMINI / CRUDEOILM, 15m, session VWAP, flat at session end; IS 
 | L7 + pyramiding (2 adds) | −34k | −20k | −4k | −20k |
 | VWAP-pullback trigger (trend session, tag VWAP, close back) | 0 of 192 IS configs profitable | | | |
 
+(Layer rows L0–L7 were run before the FX correction, which changes overnight results
+only; all these variants are intraday and flat at the close.)
+
 The intraday version does not clear costs on any layer. Moving to a **120-bar rolling
 VWAP on 30m bars with overnight holds** (an IS grid of 192 configs) gives the final
 default: **NG 30m IS +₹73k (PF 1.23) → OOS +₹18k (PF 1.10)**, but only +₹3k at 2×
@@ -190,15 +193,19 @@ the VWAP; no stop (stops lost money in IS); holds ~3 sessions (up to weeks).
 Final default on corrected data: **NATGASMINI IS +₹85k…+₹150k (PF 1.9–2.6) → OOS
 +₹21k…+₹36k (PF 1.26–1.46) on 15m/30m/60m**, OOS positive in 2024, 2025 and 2026,
 robust to 2× slippage, bootstrap P(OOS>0) 0.69–0.78. NG profit comes from fading
-up-spikes (OOS shorts +₹41k, longs −₹2k). Crude and gold lose OOS → **NG only**.
+up-spikes (30m OOS: shorts +₹38.2k, longs −₹2.0k). (The layer table above was produced
+by the research agent before the FX correction; the final row's numbers are on
+corrected data.) Crude and gold lose OOS → **NG only**.
 Caveats: ~10 trades/year; adverse excursions can be large (OOS max DD ₹43k on one lot).
 
 ### 4.5 `shock_reversal` / `spike_fade` — multi-session fade of a volatility-shock day  ✅ (crude, NG)
 
 *Regime:* EXPANSION (a shock day) → reversion over the next sessions. One value per
-completed session: z = session return / stdev of the previous 60 session returns; the
-decision is taken on the session's last bar (exchange schedule, no look-ahead), filled
-at the next session's open, held 3 sessions, closed near the close.
+completed session: z = session return / stdev of the previous 60 session returns; held
+3 sessions, closed near the close. The layer study below used the original timing
+(decide on the session's last bar, fill at the next open); the shipped default enters on
+the next session's 09:30 bar instead, because the live engine cannot act on a signal
+from the closing candle — see §6b.
 
 IS grid (180 configs, 60m): NG **short side profitable in all 24 cells** (z 1.5–2.5 ×
 hold 1–5 × both shock definitions); NG long side mostly lost. Crude positive for both
@@ -212,21 +219,24 @@ sides around z 1.5–2.0, hold 2–3.
 | + pyramid on a 2nd shock | crude IS worse; NG IS better but **OOS −₹6k** — rejected |
 | + 6-ATR catastrophic stop | ≈ no change — off |
 | NG, short only, close-to-close z ≥ 1.5 (gap clipped ±1.5%), hold 3 (**`spike_fade` default**) | IS +167k (PF 2.69) → **OOS +13.0k (PF 1.17)** |
-| `spike_fade` on **crude, never tuned on crude** | IS +22k (PF 1.53) → **OOS +33.7k (PF 2.42)**, **positive in all 8 years 2019–2026** |
+| `spike_fade` on **crude, never tuned on crude** | IS +22k (PF 1.53) → **OOS +33.7k (PF 2.42)**, positive in 7 of 8 years (2019 ≈ −₹0.5k) |
 
-Final defaults on corrected data (all three timeframes agree within a few %):
+Final defaults (live-compatible `next_session` timing) on corrected data — all three
+timeframes agree within a few %:
 
 | Strategy × instrument | IS net / PF | OOS net / PF / trades | OOS max DD | 2× slippage OOS | P(OOS>0) |
 |---|---|---|---|---|---|
-| `shock_reversal` × CRUDEOILM | +₹27–28k / 2.0–2.1 | **+₹16–17k / 2.1 / 17** | ₹8.1k | +₹15.6k | 0.89 |
-| `spike_fade` × NATGASMINI | +₹164–167k / 2.6–2.7 | **+₹11–14k / 1.15–1.19 / 43** | ₹42k | +₹8–11k | 0.62–0.64 |
-| `spike_fade` × CRUDEOILM | +₹22–23k / 1.53 | **+₹32–34k / 2.3–2.4 / 30** | ₹17k | +₹31–32k | 0.90–0.91 |
+| `shock_reversal` × CRUDEOILM | +₹25–27k / 1.9–2.0 | **+₹15–16k / 2.0–2.1 / 17** | ₹8.5k | +₹14–16k | 0.88–0.89 |
+| `spike_fade` × NATGASMINI | +₹163–168k / 2.6–2.7 | **+₹14–17k / 1.19–1.24 / 43** | ₹41–43k | +₹11–15k | 0.64–0.67 |
+| `spike_fade` × CRUDEOILM | +₹22k / 1.51–1.53 | **+₹32–33k / 2.3–2.4 / 30** | ₹16–18k | +₹31–32k | 0.90–0.92 |
 
-Per year (₹, 60m): `shock_reversal` crude 2019 +0.1k, 2020 +6.4k, 2021 +12.5k, 2022
-+6.5k, 2023 +0.1k, 2024 −0.4k, 2025 −1.8k, 2026 +20.5k · `spike_fade` NG 2019 +2.2k,
-2020 −0.6k, 2021 +18.3k, 2022 +120k, 2023 +0.3k, 2024 −5.0k, 2025 +31.7k, 2026
-−24.1k · `spike_fade` crude 2019 +2.5k, 2020 +8.7k, 2021 +0.3k, 2022 +7.4k, 2023 +2.0k,
-2024 +11.2k, 2025 +7.5k, 2026 +13.5k.
+Per year (₹, 60m, corrected data): `shock_reversal` crude 2019 +1.4k, 2020 +4.4k, 2021
++14.1k, 2022 +0.4k, 2023 +6.2k, 2024 +0.6k, 2025 −2.9k, 2026 +17.1k · `spike_fade` NG
+2019 +2.0k, 2020 −0.5k, 2021 +33.3k, 2022 +130.1k, 2023 +3.5k, 2024 +0.5k, 2025 +36.2k,
+2026 −19.5k · `spike_fade` crude 2019 −0.5k, 2020 +8.4k, 2021 +4.2k, 2022 +4.5k, 2023
++5.6k, 2024 +13.4k, 2025 +9.8k, 2026 +9.5k. (An earlier version of this report quoted
+per-year figures from a run on the pre-FX-fix data and called `spike_fade` crude
+"positive in all 8 years"; on the corrected data 2019 is slightly negative.)
 
 Gold: both variants lose — gold shocks do not revert (no fade on gold).
 
@@ -248,6 +258,40 @@ profitable in the 2024–26 bull market — **regime-dependent, not deployable a
 Keep it as a research lead: the drift is real; the open question is a cheaper way to
 hold it (e.g. carry only on nights where the drift historically concentrates).
 
+
+### 4.7 `gold_month_turn` — own gold across the turn of the month only  ⚠️ weak pass (gold)
+
+*Regime:* any — a calendar/flow effect. Found by a dedicated gold research pass (≈ 206
+configs; components first). Long GOLDPETAL from one bar before the close of the
+month's **last business day** to the **3rd session** of the new month (exit on the
+09:30 bar, live-compatible); ~12% time in market, one trade a month, no short side.
+
+| Component (daily, 2019-26) | IS | OOS |
+|---|---|---|
+| month-turn window, INR proxy | +63 bps / month (t 2.7, 62% win) | +77 bps (t 2.7, 65%) |
+| same, pure USD | +47 | +67 |
+| random same-length long windows | +14 | +33 |
+| daily trend, oversold dip-buy, hour/day-of-week, month-end short | rejected (unstable or below cost) | |
+
+| GOLDPETAL, 60m, 1 lot | IS (2019-23) | OOS (2024-26) |
+|---|---|---|
+| buy-and-hold | +₹2,730 (DD ₹1,097) | +₹7,787 (DD ₹4,658) |
+| buy-and-hold × 12% exposure | +₹335 | +₹912 |
+| **`gold_month_turn` default** | **+₹852, PF 1.71, 57 trades, DD ₹277** | **+₹1,528, PF 2.01, 29 trades, DD ₹1,033** |
+| … minus futures carry (≈ 1.8 bps/calendar day) | +₹670 | +₹1,301 |
+| GOLDGUINEA / GOLDM | +₹7.2k / +₹111k | +₹13.2k / +₹186k |
+
+Positive every calendar year 2019–2026 (incl. flat 2021 and the 2026 drop), 15m/30m
+agree, 2× slippage still positive, bootstrap P(>0) 0.93–0.98.
+
+**Independent check on unseen data (2005–2018, USD daily, identical daily method):**
++16.6 bps per month-turn (t 1.3) vs +9.0 bps for random windows → excess **+7.5 bps**,
+against +41 bps (2019–23) and +20 bps (2024–26). The effect is much weaker outside the
+period it was found in (selection bias + a smaller true effect): on GOLDPETAL's ~15 bps
+round trip the 2005–2018 version would have been about break-even. **Verdict: a
+low-conviction calendar overlay; prefer GOLDGUINEA/GOLDM (lower cost per gram);
+paper-trade before trusting it.** Note: the gold proxy is spot — futures carry has been
+subtracted above; trade the MCX contract that stays live through the month turn.
 
 ## 5. Regime → strategy map
 
@@ -281,20 +325,25 @@ home for the fade strategies.
 **Requirement met — profitable after charges on crude and natural gas, in-sample AND
 out-of-sample:**
 
-1. **`spike_fade` (Energy Up-Spike Fade)** — NATGASMINI OOS +₹13k (PF 1.17); on
-   CRUDEOILM (never tuned there) OOS +₹34k (PF 2.42), positive in all 8 years.
-2. **`shock_reversal`** — CRUDEOILM OOS +₹16k (PF 2.11), IS +₹28k (PF 2.13).
-3. **`vwap_band_reversion`** — NATGASMINI OOS +₹21k…+₹36k (PF 1.26–1.46).
+1. **`spike_fade` (Energy Up-Spike Fade)** — NATGASMINI OOS +₹14–17k (PF 1.19–1.24);
+   on CRUDEOILM (never tuned there) OOS +₹32–33k (PF 2.3–2.4), 7 of 8 years positive.
+2. **`shock_reversal`** — CRUDEOILM OOS +₹15–16k (PF 2.0–2.1), IS +₹25–27k (PF 1.9–2.0).
+3. **`vwap_band_reversion`** — NATGASMINI OOS +₹21k…+₹36k (PF 1.26–1.46); 98% of its
+   parameter neighbourhood is profitable in both periods (§6b).
 
-A pre-declared book of 1 lot each (`shock_reversal` crude + `spike_fade` NG +
-`vwap_band_reversion` NG) was **positive in every calendar year 2019–2026**: IS
-+₹346k (daily Sharpe 1.48, max DD ₹38k), OOS +₹65k (Sharpe 0.55, max DD ₹75k);
-monthly correlation crude vs NG legs ≈ 0. (Swapping the crude leg to `spike_fade`
-after seeing its result gives OOS +₹83k, Sharpe 0.66 — post-hoc, so not the headline.)
+All three keep the same sign on real NYMEX bars (§6b). A pre-declared book of 1 lot
+each (`shock_reversal` crude + `spike_fade` NG + `vwap_band_reversion` NG, live-
+compatible timing) was **positive in every calendar year 2019–2026**: IS +₹345k (daily
+Sharpe 1.46, max DD ₹39k), OOS +₹68k (Sharpe 0.57, max DD ₹73k); monthly correlation of
+the crude leg with the NG legs ≈ 0. (Swapping the crude leg to `spike_fade` after seeing
+its result gives OOS +₹86k, Sharpe 0.69 — post-hoc, so not the headline.)
 
-**Not met on gold.** No gold strategy was robust: the only real gold component is the
-MCX overnight drift, which GOLDPETAL's cost structure eats; on GOLDM it works only in
-the 2024–26 bull market.
+**Gold: a weak pass.** `gold_month_turn` (§4.7) is profitable after charges, slippage
+and futures carry on GOLDPETAL, GOLDGUINEA and GOLDM in both periods and every year
+2019–2026 — but on unseen 2005–2018 data its edge was only ~7.5 bps a month above
+random timing (≈ break-even on GOLDPETAL). Low conviction; prefer the cheaper-per-gram
+contracts. The gold MCX overnight drift is real but too small for GOLDPETAL's costs (and
+partly offset by futures carry).
 
 **Honest caveats.**
 * Small samples: 10–15 trades/year per strategy; OOS P(total > 0) by bootstrap is
@@ -313,10 +362,72 @@ to §7. (2) Paper-trade `spike_fade` on NATGASMINI + CRUDEOILM. (3) Gold: test t
 overnight carry on GOLDM with real MCX prints, and research the cheaper "hold the drift"
 variants. (4) Re-run `final_eval.py` quarterly.
 
+## 6b. Robustness and live-readiness checks (added 2026-10-08)
+
+### Independent data: real NYMEX bars (Yahoo Finance, 60m, 2024-05 → 2026-10)
+
+The same strategies, unchanged, on a second data source — real exchange prints and
+real exchange volume (`research/commodity/build_yahoo.py`, `crosscheck_yahoo.py`).
+Yahoo's continuous contract switches at ~07:00 UTC (12:30 IST, *inside* the MCX
+session) the day after expiry, so rolls are found from the NYMEX expiry calendar and
+ratio back-adjusted; compare PF / return per trade (back-adjustment rescales older
+rupee levels a little).
+
+| Strategy × instrument | Dukascopy, same window | Yahoo NYMEX |
+|---|---|---|
+| `spike_fade` × NG | +₹29.5k, PF 1.56, 35 trades | **+₹43.1k, PF 5.9**, 19 trades, every year + |
+| `spike_fade` × crude | +₹34.7k, PF 2.53 | **+₹54.7k, PF 7.4**, every year + |
+| `shock_reversal` × crude | +₹18.8k, PF 2.53 | **+₹8.7k, PF 1.52** |
+| `vwap_band_reversion` × NG | +₹39.6k, PF 1.68 | **+₹78.4k, PF 3.6**, every year + |
+| `vwap_slope_divergence` / `adaptive_supertrend` / `trend_impulse_v3` × NG | all lose | all lose |
+
+Same ranking on both sources. Yahoo trade counts are small, so its high PFs are not
+precise estimates — the point is that the sign and ordering hold on real exchange data.
+
+### Parameter neighbourhoods (Dukascopy, 2019-2026; `research/commodity/neighbourhood.py`)
+
+Every combination around each default (z threshold, hold, volatility window, gap clip
+/ trend window; for band reversion: anchor days, band k, push ER, add k):
+
+| Strategy | Neighbours | IS > 0 | OOS > 0 | both > 0 | note |
+|---|---|---|---|---|---|
+| `vwap_band_reversion` × NG 30m | 81 | 98% | **100%** | **98%** | broad plateau |
+| `spike_fade` × NG 60m | 144 | **100%** | 67% | 67% | median OOS +₹9k |
+| `shock_reversal` × crude 60m | 144 | 57% | 94% | 53% | hold = 3 is the IS plateau; 4–5 lose IS |
+| `spike_fade` × crude 60m | 144 | 51% | 69% | 41% | z 1.5–1.75 and hold 3 good; z 1.25 loses |
+
+The NG strategies sit on broad plateaus. The crude results are real but parameter-
+sensitive (mainly the hold length) — treat crude as the weaker leg.
+
+### Live-engine compatibility — two fixes
+
+1. **Entry timing.** The live engine drops a signal it sees more than 5 minutes after
+   its candle closed, never opens outside the session, and opens nothing before
+   09:30. The shock strategies originally decided on the session's LAST bar (which
+   closes at the 23:30/23:55 exchange close) and filled at the next open — a timing
+   the live engine can never execute. New default `decide_at="next_session"`: decide
+   on the completed shock session, enter on the next session's first bar ending at or
+   after 09:30 IST (`entry_minute`). It keeps the edge (15m, IS → OOS):
+   `shock_reversal` crude +₹25.1k → +₹16.4k (PF 2.08); `spike_fade` NG +₹164k →
+   +₹16.4k (PF 1.23); `spike_fade` crude +₹21.9k → +₹31.8k (PF 2.26). (Deciding one
+   bar before the close instead — `penultimate` — hurt crude: the shorts then carry
+   crude's positive overnight drift.)
+2. **History length.** The runner fetched 30 calendar days of candles (≈ 21 MCX
+   sessions); the shock strategies need ≥ 30 sessions for their volatility norm, so
+   they could never have signalled live. A strategy can now declare
+   `min_history_days` (shock strategies: 120); `runner.history_days_for()` fetches the
+   larger of that and `history_days`, capped at Kite's per-request maximum for the
+   interval (15m: 200 days, 5m: 100).
+
+Still to keep in mind for live use: the engine trades **options** on these signals,
+with its own −35%/+60% premium stop/target, overnight-holding rules and expiry
+guards; the backtests here trade the underlying. Paper-trade first.
+
 ## 7. Full evaluation matrix
 
-`research/commodity/final_eval.py` (default params, corrected data). Columns: IS net ₹
-(PF) | OOS net ₹ (PF) / trades / max DD ₹ | OOS at 2× slippage | bootstrap P(OOS > 0).
+`research/commodity/final_eval.py` → `results/final_eval.json` (default params incl. the
+live-compatible shock timing, corrected data). Columns: IS net ₹ (PF) | OOS net ₹ (PF) /
+trades / max DD ₹ | OOS at 2× slippage | bootstrap P(OOS > 0).
 
 | Strategy | Instrument | tf | IS | OOS | OOS 2× slip | P(OOS>0) |
 |---|---|---|---|---|---|---|
@@ -359,27 +470,27 @@ variants. (4) Re-run `final_eval.py` quarterly.
 | vwap_band_reversion | GOLDPETAL | 15m | +0.8k (1.236) | -5.0k (0.405) / 34 / 6.1k | -5.2k | 0.048 |
 | vwap_band_reversion | GOLDPETAL | 30m | +0.8k (1.273) | -7.8k (0.211) / 29 / 8.3k | -8.1k | 0.004 |
 | vwap_band_reversion | GOLDPETAL | 60m | +1.4k (1.546) | -6.0k (0.287) / 30 / 6.2k | -6.2k | 0.006 |
-| shock_reversal | NATGASMINI | 15m | -62.6k (0.282) | -34.9k (0.386) / 14 / 45.7k | -35.8k | 0.154 |
-| shock_reversal | NATGASMINI | 30m | -57.0k (0.289) | -36.4k (0.37) / 14 / 46.9k | -37.3k | 0.149 |
-| shock_reversal | NATGASMINI | 60m | -56.3k (0.289) | -39.0k (0.331) / 14 / 49.0k | -39.9k | 0.117 |
-| shock_reversal | CRUDEOILM | 15m | +27.0k (2.007) | +17.0k (2.153) / 17 / 8.1k | +16.4k | 0.895 |
-| shock_reversal | CRUDEOILM | 30m | +27.1k (2.012) | +16.2k (2.107) / 17 / 8.2k | +15.6k | 0.887 |
-| shock_reversal | CRUDEOILM | 60m | +28.4k (2.13) | +16.3k (2.108) / 17 / 8.2k | +15.6k | 0.888 |
-| shock_reversal | GOLDPETAL | 15m | -0.5k (0.64) | -1.7k (0.471) / 19 / 2.3k | -1.8k | 0.13 |
-| shock_reversal | GOLDPETAL | 30m | -0.5k (0.656) | -1.8k (0.459) / 19 / 2.4k | -1.9k | 0.124 |
-| shock_reversal | GOLDPETAL | 60m | -0.5k (0.659) | -1.7k (0.47) / 19 / 2.3k | -1.8k | 0.128 |
-| shock_reversal | GOLDM | 15m | -33.7k (0.733) | -150.6k (0.515) / 19 / 218.5k | -154.5k | 0.159 |
-| shock_reversal | GOLDM | 30m | -31.1k (0.751) | -154.8k (0.503) / 19 / 222.3k | -158.7k | 0.149 |
-| shock_reversal | GOLDM | 60m | -31.8k (0.752) | -146.9k (0.515) / 19 / 214.0k | -150.8k | 0.156 |
-| spike_fade | NATGASMINI | 15m | +165.9k (2.665) | +13.6k (1.186) / 43 / 42.2k | +11.2k | 0.638 |
-| spike_fade | NATGASMINI | 30m | +164.5k (2.636) | +10.9k (1.146) / 43 / 43.9k | +8.5k | 0.615 |
-| spike_fade | NATGASMINI | 60m | +167.5k (2.688) | +13.0k (1.174) / 43 / 42.9k | +10.6k | 0.633 |
-| spike_fade | CRUDEOILM | 15m | +22.7k (1.534) | +31.9k (2.271) / 30 / 17.5k | +30.6k | 0.897 |
-| spike_fade | CRUDEOILM | 30m | +22.4k (1.532) | +33.4k (2.413) / 30 / 16.6k | +32.2k | 0.913 |
-| spike_fade | CRUDEOILM | 60m | +22.0k (1.528) | +33.7k (2.418) / 30 / 16.7k | +32.4k | 0.914 |
-| spike_fade | GOLDPETAL | 15m | -0.7k (0.736) | -1.4k (0.78) / 42 / 3.4k | -1.7k | 0.326 |
-| spike_fade | GOLDPETAL | 30m | -0.7k (0.739) | -1.5k (0.762) / 42 / 3.4k | -1.8k | 0.315 |
-| spike_fade | GOLDPETAL | 60m | -0.8k (0.728) | -1.5k (0.767) / 42 / 3.4k | -1.7k | 0.319 |
+| shock_reversal | NATGASMINI | 15m | -61.8k (0.287) | -33.3k (0.402) / 14 / 43.9k | -34.1k | 0.165 |
+| shock_reversal | NATGASMINI | 30m | -56.2k (0.295) | -34.8k (0.386) / 14 / 45.1k | -35.6k | 0.159 |
+| shock_reversal | NATGASMINI | 60m | -54.4k (0.299) | -37.6k (0.34) / 14 / 47.8k | -38.5k | 0.121 |
+| shock_reversal | CRUDEOILM | 15m | +25.1k (1.883) | +16.4k (2.084) / 17 / 8.5k | +15.8k | 0.888 |
+| shock_reversal | CRUDEOILM | 30m | +25.2k (1.891) | +15.6k (2.039) / 17 / 8.5k | +14.9k | 0.881 |
+| shock_reversal | CRUDEOILM | 60m | +26.5k (2.018) | +14.8k (2.005) / 17 / 8.5k | +14.2k | 0.877 |
+| shock_reversal | GOLDPETAL | 15m | -0.5k (0.626) | -1.7k (0.493) / 19 / 2.3k | -1.8k | 0.14 |
+| shock_reversal | GOLDPETAL | 30m | -0.5k (0.642) | -1.7k (0.481) / 19 / 2.4k | -1.8k | 0.134 |
+| shock_reversal | GOLDPETAL | 60m | -0.5k (0.635) | -1.7k (0.484) / 19 / 2.3k | -1.8k | 0.133 |
+| shock_reversal | GOLDM | 15m | -35.5k (0.719) | -146.0k (0.538) / 19 / 218.6k | -149.9k | 0.166 |
+| shock_reversal | GOLDM | 30m | -32.8k (0.737) | -150.2k (0.525) / 19 / 222.4k | -154.1k | 0.162 |
+| shock_reversal | GOLDM | 60m | -34.9k (0.727) | -148.4k (0.528) / 19 / 217.7k | -152.3k | 0.163 |
+| spike_fade | NATGASMINI | 15m | +164.4k (2.631) | +16.4k (1.226) / 43 / 41.3k | +14.0k | 0.661 |
+| spike_fade | NATGASMINI | 30m | +163.0k (2.604) | +13.6k (1.186) / 43 / 43.0k | +11.2k | 0.64 |
+| spike_fade | NATGASMINI | 60m | +168.4k (2.667) | +17.2k (1.237) / 43 / 41.6k | +14.8k | 0.665 |
+| spike_fade | CRUDEOILM | 15m | +21.9k (1.507) | +31.8k (2.264) / 30 / 17.6k | +30.6k | 0.899 |
+| spike_fade | CRUDEOILM | 30m | +21.6k (1.507) | +33.4k (2.442) / 30 / 16.2k | +32.1k | 0.916 |
+| spike_fade | CRUDEOILM | 60m | +22.1k (1.528) | +32.7k (2.374) / 30 / 16.0k | +31.4k | 0.91 |
+| spike_fade | GOLDPETAL | 15m | -0.7k (0.732) | -1.3k (0.792) / 42 / 3.4k | -1.6k | 0.339 |
+| spike_fade | GOLDPETAL | 30m | -0.7k (0.735) | -1.4k (0.774) / 42 / 3.4k | -1.7k | 0.321 |
+| spike_fade | GOLDPETAL | 60m | -0.8k (0.706) | -1.5k (0.759) / 42 / 3.5k | -1.8k | 0.313 |
 | session_gap_carry | NATGASMINI | 15m | -51.0k (0.859) | -85.0k (0.633) / 354 / 87.3k | -104.5k | 0.004 |
 | session_gap_carry | NATGASMINI | 30m | -74.8k (0.82) | -75.9k (0.672) / 357 / 78.7k | -95.7k | 0.015 |
 | session_gap_carry | NATGASMINI | 60m | -40.7k (0.906) | -67.4k (0.707) / 349 / 74.9k | -86.7k | 0.023 |
@@ -410,6 +521,10 @@ cd paper-trader/research/commodity
 ../../backend/.venv/bin/python build_dataset.py      # → data/mcx/*_{5,15,30,60}m.pkl  (MCX session, INR, rolls)
 ../../backend/.venv/bin/python final_eval.py         # the §7 matrix
 ../../backend/.venv/bin/python portfolio.py          # per-year, regime attribution, books
+../../backend/.venv/bin/python neighbourhood.py      # parameter-neighbourhood robustness
+../../backend/.venv/bin/python verify_gold_month_turn.py   # carry adjustment + 2005-2018 check (needs data/d1/xauusd_d1.csv)
+../../backend/.venv/bin/python build_yahoo.py NG=F:NATGASMINI CL=F:CRUDEOILM   # needs data/yahoo/*.json
+COMMODITY_DATA=<root whose mcx/ -> yahoo_mcx/> ../../backend/.venv/bin/python crosscheck_yahoo.py
 ```
 Component studies: `features.py`, `session.py`, `hours.py`, `gold_usd_gap.py`,
 `gold_night.py`, `overnight2.py`, `ng_shock.py`. Silver was not evaluated: the

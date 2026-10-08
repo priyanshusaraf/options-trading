@@ -102,14 +102,49 @@ def test_session_gap_carry_timing(frame):
     assert not out["shortEntry"].any()            # long-only by default
 
 
-def test_shock_reversal_decides_on_last_bar_only(frame):
-    out = get_strategy("shock_reversal").signals(frame, z_entry=1.0, z_len=20)
+def test_shock_reversal_backtest_timing_decides_on_last_bar(frame):
+    out = get_strategy("shock_reversal").signals(frame, z_entry=1.0, z_len=20,
+                                                 decide_at="last", trend_sessions=0)
     btc = bars_to_session_close(frame)
     entries = out["longEntry"] | out["shortEntry"]
     assert entries.sum() > 0
     assert (btc[entries] == 0).all()
     exits = out["longExit"] | out["shortExit"]
     assert (btc[exits] == 1).all()                # exit_at="close" -> second-to-last bar
+
+
+@pytest.mark.parametrize("key", ["shock_reversal", "spike_fade"])
+def test_shock_entry_is_live_compatible_by_default(frame, key):
+    """Default timing must survive the live engine's guards: the entry candle ends
+    at/after 09:30 IST (entry window) inside the session (not at the close), on the
+    session AFTER the shock, and it is the same shock the backtest-only "last"
+    timing would have taken."""
+    s = get_strategy(key)
+    live = s.signals(frame, z_entry=1.0, z_len=20, trend_sessions=0)
+    last = s.signals(frame, z_entry=1.0, z_len=20, trend_sessions=0, decide_at="last")
+    d = pd.to_datetime(frame["date"])
+    end_min = d.dt.hour * 60 + d.dt.minute + 15
+    for col in ("longEntry", "shortEntry"):
+        le = live[col].to_numpy()
+        assert le.sum() == last[col].sum() > 0 or col == "longEntry" and key == "spike_fade"
+        assert (end_min[le] >= 570).all()
+        assert (end_min[le] == 570).all()            # the 09:15 bar, which ends at 09:30
+        assert (bars_to_session_close(frame)[le] > 0).all()
+        # each live entry sits in the session right after a "last"-timing shock
+        shock_days = sorted(set(d[last[col]].dt.date))
+        live_days = sorted(set(d[live[col]].dt.date))
+        sessions = sorted(set(d.dt.date))
+        nxt = {sessions[i]: sessions[i + 1] for i in range(len(sessions) - 1)}
+        assert live_days == [nxt[x] for x in shock_days if x in nxt]
+
+
+def test_runner_history_days_for():
+    from app.engine.runner import history_days_for
+    sr = get_strategy("shock_reversal")
+    assert history_days_for(sr, "15minute", 30) == 120          # raised to the strategy need
+    assert history_days_for(sr, "5minute", 30) == 100           # capped at Kite's 5m maximum
+    assert history_days_for(get_strategy("trend_impulse_v3"), "15minute", 30) == 30
+    assert history_days_for(sr, "60minute", 300) == 300         # the setting wins when larger
 
 
 def test_vwap_helpers():
